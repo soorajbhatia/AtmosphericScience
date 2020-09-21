@@ -1,0 +1,998 @@
+#!/usr/bin/python
+#
+# qplot -- A quick and dirty plotter based on python and matplotlib.
+#
+from numpy import *
+from py3io import *
+import matplotlib
+matplotlib.use('tkagg')
+import matplotlib.pyplot as plt
+import sys
+import os
+
+# ==================================================================
+# helper functions
+
+# ==================================================================
+# call a color map function
+def colormap(cmap):
+    i = int(cmap)
+    if i == 1:
+        plt.jet()
+    elif i == 2:
+        plt.gray()
+    elif i == 3:
+        plt.summer()
+    elif i == 4:
+        plt.spectral()
+    else:
+        print ("color map", cmap, "undefined")
+        quit()
+
+# ==================================================================
+# create an array from a string of numbers separated by colons
+def makearray(numstr):
+    snums = numstr.split(':')
+    a = []
+    for snum in snums:
+        a.append(float(snum))
+
+    return array(a)
+
+# ==================================================================
+# escape plotstring formatting characters
+def escape(pstr):
+    pstr1 = pstr.replace('~,','~comma')
+    pstr2 = pstr1.replace('~/','~slash')
+    pstr3 = pstr2.replace('~~','~tilde')
+    return pstr3
+
+# ==================================================================
+# unescape plotstring formatting characters
+def unescape(pstr):
+    pstr1 = pstr.replace('~comma',',')
+    pstr2 = pstr1.replace('~slash','/')
+    pstr3 = pstr2.replace('~tilde','~')
+    return pstr3
+
+# ==================================================================
+# get a non-masked field
+def getvar(fh, varname):
+    vstuff = fh.get_field_shaped(varname)
+    v = vstuff[0]
+    vdims = vstuff[1]
+    return [v, vdims]
+
+# =================================================================
+# get a masked field
+def getmvar(fh, varname, badlim):
+    vstuff = fh.get_field_shaped(varname)
+    v = vstuff[0]
+    vdims = vstuff[1]
+    m = v > badlim
+    mv = ma.array(v, mask = m)
+    return [mv, vdims]
+
+# =====================================================================
+# check1dplot
+def check1dplot(xraw, yraw, xdims, ydims):
+    if size(xdims) == 1 and xdims[0] == ydims[0]:
+        x = xraw
+        y = yraw.reshape(size(xraw),int(size(yraw)/size(xraw)))
+    elif size(ydims) == 1 and ydims[0] == xdims[0]:
+        x = xraw.reshape(size(yraw),int(size(xraw)/size(yraw)))
+        y = yraw
+    elif xdims == ydims:
+        x = xraw.reshape(size(xraw))
+        y = yraw.reshape(size(yraw))
+    else:
+        print ("qplot: dimensions ", xdims, " and ", ydims, " inconsistent")
+        quit()
+    return [x, y]
+
+# =====================================================================
+# check2dplot
+def check2dplot(xdims, ydims, vardims):
+    if len(vardims) != 2:
+        print ("qplot: variable in 2D plot doesn't have 2 dims: ", vardims)
+        quit()
+
+    if len(xdims) != 1:
+        print ("qplot: x dimension isn't an index field")
+        quit()
+
+    if len(ydims) != 1:
+        print ("qplot: y dimension isn't an index field")
+        quit()
+
+    if xdims[0] != vardims[0]:
+        print ("qplot: first var dim should be ", xdims[0], ", is ", vardims[0])
+        quit()
+
+    if ydims[0] != vardims[1]:
+        print ("qplot: second var dim should be ", ydims[0], ", is ", vardims[1])
+        quit()
+
+# =====================================================================
+# =====================================================================
+# =====================================================================
+# Do autoscaling of vectors for vector plots
+def autoscale(xloc,yloc,xcomp,ycomp,badlim):
+    sfactor = 0.025
+    nx = len(xloc)
+    ny = len(yloc)
+    maxx = 0.
+    maxy = 0.
+    for ix in range(nx):
+    	for iy in range(ny):
+            abx = abs(xcomp[ix,iy])
+            aby = abs(ycomp[ix,iy])
+            if (abx < badlim) & (aby < badlim):
+                if abx > maxx:
+                    maxx = abx
+                if aby > maxy:
+                    maxy = aby
+                    
+    if maxx > 0.:
+        scalex = abs(xloc[nx - 1] - xloc[0])/maxx
+    else:
+        scalex = 1.
+    if maxy > 0.:
+        scaley = abs(yloc[ny - 1] - yloc[0])/maxy
+    else:
+        scaley = 1.
+    scale = sfactor*(scalex + scaley)
+    return(scale)
+                
+# =====================================================================
+# =====================================================================
+# =====================================================================
+# Makes vector plots
+# xloc and yloc are the 1-D axis values
+# xcomp and ycomp are the 2-D vector components -- to be
+#    consistent with the rest of qplot, put in the transpose of these
+# scale is the scaling factor
+# color is the color
+# px and py are the horizontal and vertical sizes of the subplot
+# myvector upgraded to plt.quiver
+def myvector(xloc,yloc,xcomp,ycomp,scale,color,badlim):
+    nx = len(xloc)
+    ny = len(yloc)
+    factor = (yloc[ny - 1] - yloc[0])/(xloc[nx - 1] - xloc[0])
+    for ix in range(nx):
+        for iy in range(ny):
+            if abs(xcomp[ix,iy]) > badlim or abs(ycomp[ix,iy]) > badlim:
+                xcomp[ix,iy] = NaN
+                ycomp[ix,iy] = NaN
+    Q = plt.quiver(xloc,yloc,flip(rot90(xcomp),0),flip(rot90(ycomp),0),units='xy',angles='xy',color = color, headwidth = 5, minshaft = 2)
+
+# =====================================================================
+# =====================================================================
+# =====================================================================
+# Make an arrowscale to correspond to previous vector plot
+def myarrow(xloc,yloc,x,y,scale,length,vtext,color):
+    nx = len(xloc)
+    ny = len(yloc)
+    factor = (yloc[ny - 1] - yloc[0])/(xloc[nx - 1] - xloc[0])
+    xscale = length*scale
+    head1 = 0.6
+    head2 = 0.15
+    xhead = x + 1.0*xscale
+    yhead = y + 0.0*xscale
+    xleft = x + head1*xscale
+    yleft = y + head2*xscale*factor
+    xright = x + head1*xscale
+    yright = y - head2*xscale*factor
+    txtoffset = 0.3*xscale
+    ll = plt.plot([x,xhead],[y,yhead],color,clip_on=False)
+    ll = plt.plot([xhead,xleft],[yhead,yleft],color,clip_on=False)
+    ll = plt.plot([xhead,xright],[yhead,yright],color,clip_on=False)
+    txt = plt.text(x - txtoffset,y,vtext,horizontalalignment='right',
+                   verticalalignment='center')
+
+# =====================================================================
+# =====================================================================
+# =====================================================================
+# get input
+args = sys.argv
+if len(args) != 2 and len(args) != 4 and len(args) != 5:
+    print ("Usage: qplot 'plot_string' [prefix suffix [nslices]] < candis_file")
+    print ("  The default number of slices plotted is one.")
+    print ("  Prefix and suffix define format of optional plot file output;")
+    print ("    prefix00.suffix, prefix01.suffix, etc.")
+    print ("  The suffix specifies file type; ps, eps, pdf, png, etc.")
+    print ("  Without this option, the standard preview command is used.")
+    print ("  Plot_string is of the form command/command/.../command")
+    print ("  Escape ',' '/' '~' with '~' e. g. '~,' --> ',' etc.")
+    print ("")
+    print ("pre-plotting commands:")
+    print ("  /size,fs/ - set font size (points, 12 default) - optional,")
+    print ("    first")
+    print ("  /sx,sy,nx,ny[,lm,rm,bm,tm,hs,vs],fg/ - define figure size,")
+    print ("    number of plots, and optionally, non-default spacings")
+    print ("    sx, sy give figure dimensions in inches (8x6 inch default),")
+    print ("    nx, ny give the number of rows and columns of figures")
+    print ("    (1x1 default) - optional, before plotting commands")
+    print ("    lm, rm, bm, tm, hs, vs give left, right, bottom, top")
+    print ("    margins in inches, hs and vs give horizontal and")
+    print ("    vertical inter-figure spacings (inches, but elastic!)")
+    print ("    defaults are 1.0, 1.0, 1.0, 1.0, 3.0, 3.0 inches")
+    print ("  /spnum,sp/ - set subplot, only needed for multi-plot figure,")
+    print ("    plot number spnum 1 to nx*ny, columns interate most rapidly")
+    print ("")
+    print ("plotting commands:")
+    print ("  /x,y,var[,cmap[,ccs]],f/ - make a filled contour plot with")
+    print ("    color bar, x, y horizontal and vertical index fields, var 2-D")
+    print ("    optional cmap = 1 (jet, default), 2 (gray), 3 (summer),")
+    print ("    4 (spectral) -- optional ccs specifies contours in the")
+    print ("    form mincont:maxcont:numconts")
+    print ("    field to be contoured (buggy -- use color image if problem)")
+    print ("  /x,y,var[,cmap],i/ - make a color mesh grid with color bar,")
+    print ("    otherwise like filled contour plot")
+    print ("  /x,y,var[,c[,lw[,ccs]]],c/ - make a contour plot, like filled")
+    print ("    contour plot with optional color c = r,g,b,y,m,c,k,w,")
+    print ("    line width lw in points -- ccs specifies contours in the")
+    print ("    form mincont:maxcont:numconts")
+    print ("  /x,y,u,v,skx,sky[,scale[,c]],v/ - make a vector plot with")
+    print ("    x, y as above, u, v vector components, skx, sky thinning")
+    print ("    factors, scale = axis unit per vector unit, c color as above")
+    print ("  /x,y[,fmt[,lw[,legend]]],p/ - make a line or point plot of y vs x")
+    print ("    line/point format fmt = color-line, e.g. r., k--, etc.,")
+    print ("    line width lw as above, or marker size if point plot")
+    print ("    if the legend is present, it displaces the default legend")
+    print ("  /x,y[,fmt[,lw[,legend]]],x/ = make a semi-log-x line plot")
+    print ("    arguments as for an ordinary line plot")
+    print ("  /x,y[,fmt[,lw[,legend]]],y/ = make a semi-log-y line plot")
+    print ("    arguments as for an ordinary line plot")
+    print ("  /x,y[,fmt[,lw[,legend]]],l/ = make a log-log line plot")
+    print ("    arguments as for an ordinary line plot")
+    print ("  /xcoords,ycoords[,fmt[,lw[,legend]]],d/ - draw polyline, with")
+    print ("    xcoords, ycoords in form like 3:7:8, otherwise like line plot")
+    print ("  /x,y,len,label[,c],a/ - make a labeled arrow to indicate")
+    print ("    vector length scale -- x,y indicate location, len indicates")
+    print ("    length in physical units, label is the text label, and c")
+    print ("    is the optional color as in line plot")
+    print ("")
+    print ("beautification commands:")
+    print ("  /xmin,xmax,dx,ymin,ymax,dy,ax/ - set axes, xmin, xmax, dx")
+    print ("    give min and max physical limits, dx tick intervals,")
+    print ("    same for y variables")
+    print ("  /label,lx/ - label x axis, latex between $$")
+    print ("  /label,ly/ - label y axis, latex between $$")
+    print ("  /label,xloc,yloc[,c],ll/ - label at (x,y),")
+    print ("    color = c, latex between $$")
+    print ("  /title[,fs],tl/ - make title, opt fs, latex between $$")
+    print ("  /title[,fs],tu/ - make uber title, opt fs, latex between $$")
+    print ("  /[location,]le/ - draw legend for line plots")
+    print ("    location = e|ne|n|nw|w|sw|s|se|c (default ne)")
+    print ("  /onoff,gr/ - draw a grid on a plot or subplot")
+    print ("    onoff = 1 ==> on, onoff = 0 ==> off (default)")
+
+    quit()
+
+
+# ================================================================
+# set up for keyboard interrupt
+try:
+    
+    # get the plot string and other stuff
+    rawplotstring = args[1]
+    if len(args) == 2:
+        interactive = True
+        nslices = 1
+    else:
+        interactive = False
+        file_prefix = args[2]
+        file_suffix = args[3]
+        if len(args) == 5:
+            nslices = int(args[4])
+        else:
+            nslices = 1
+    
+    # ================================================================
+    # create instance and read on standard input
+    filehandle = candis()
+    filehandle.get_candis('-')
+    
+    # ================================================================
+    # loop on variable slices, starting new figure each time
+    vslicenum = 0
+    while True:
+        plt.figure()
+    
+        # ================================================================
+        # set matplotlib defaults for qplot
+        fsize = 12
+        sx = 8.0
+        sy = 6.0
+        vhandle = False
+        plt.rcParams['legend.fontsize'] = 'medium'
+        plt.rcParams['xtick.direction'] = 'out'
+        plt.rcParams['ytick.direction'] = 'out'
+    
+        # set ordering flags
+        colorbardefined = False
+        hlabel = ''
+        vlabel = ''
+        vhandle = ''
+    
+        # this overcomes a bug in matplotlib which messes up line plots
+        plt.rcParams['path.simplify'] = False
+    
+        # the following is a workaround for a problem with type 3 fonts
+        plt.rcParams['ps.fonttype'] = 42
+        
+        # get the badlim parameter
+        badlim = float(filehandle.get_param('badlim'))
+    
+        # ================================================================
+        # split plot string into commands
+        # first, do some escaping
+        plotstring = escape(rawplotstring)
+    
+        # then, split up the plotstring
+        commandlist = plotstring.split('/')
+        
+        # split commands into pieces, skipping null strings and executing commands
+        noplotcmd = True
+        nofigcmd = True
+        noprettycmd = True
+        nx = 1
+        ny = 1
+        
+        for command in commandlist:
+        
+            # ==================================================================
+            # skip null commands
+            if command == '':
+                continue
+            pieces = command.split(',')
+            for i in range(len(pieces)):
+                pieces[i] = unescape(pieces[i])
+        
+            # ==================================================================
+            if pieces[-1] == 'fs':  # set font size (points, 12 default)
+                if len(pieces) != 2:
+                    print ("qplot: expect /size,fs/,", "got", command)
+                    quit()
+        
+                if not noplotcmd or not noprettycmd or not nofigcmd:
+                    print ("qplot: fs command should be first")
+                    quit()
+        
+                fsize = int(pieces[0])
+                plt.rcParams['font.size'] = fsize
+        
+            # ==================================================================
+            elif pieces[-1] == 'fg':  # define a figure
+                if len(pieces) != 5 and len(pieces) != 11:
+                    print ("qplot: expect /sx,sy,nx,ny[,lm,rm,bm,tm,hs,vs],fg/,", "got", command)
+                    quit()
+        
+                if not noplotcmd or not noprettycmd or not nofigcmd:
+                    print ("qplot: fg command should be first after fontsize")
+                    quit()
+        
+                sx = float(pieces[0])
+                sy = float(pieces[1])
+                nx = int(pieces[2])
+                ny = int(pieces[3])
+    
+                # our spacings are in inches -- these are the defaults
+                lm = 1.0
+                rm = 1.0
+                bm = 1.0
+                tm = 1.0
+                hs = 3.0
+                vs = 3.0
+                if len(pieces) == 11:
+                    xxx = float(pieces[4])
+                    if xxx > 0.: lm = xxx
+                    xxx = float(pieces[5])
+                    if xxx > 0.: rm = xxx
+                    xxx = float(pieces[6])
+                    if xxx > 0.: bm = xxx
+                    xxx = float(pieces[7])
+                    if xxx > 0.: tm = xxx
+                    xxx = float(pieces[8])
+                    if xxx > 0.: hs = xxx
+                    xxx = float(pieces[9])
+                    if xxx > 0.: vs = xxx
+    
+                fclose = plt.close('all')
+                fghandle = plt.figure(figsize=(sx,sy))
+    
+                # convert spacing in inches to fractional domain spacings
+                fleft = lm/sx
+                fright = 1 - rm/sx
+                fbottom = bm/sy
+                ftop = 1 - tm/sy
+                fhoriz = hs/sx
+                fvert = vs/sy
+                plt.subplots_adjust(left=fleft,right=fright,bottom=fbottom,
+                                    top=ftop,wspace=fhoriz,hspace=fvert)
+    
+                nofigcmd = False
+        
+            # ==================================================================
+            elif pieces[-1] == 'sp':  # define a subplot
+        
+                # write axis labels from previous plot if they exist -- if
+                # this is first subplot call, the label lengths should be zero
+                if len(hlabel) > 0:
+                    xlhandle = plt.xlabel(hlabel)
+                if len(vlabel) > 0:
+                    ylhandle = plt.ylabel(vlabel)
+        
+                if len(pieces) != 2:
+                    print ("qplot: expect /spnum,sp/,", "got", command)
+                    quit()
+                if nofigcmd:
+                    print ("qplot: call fg command before sp command")
+                    quit()
+        
+                plotnum = int(pieces[0])
+                sphandle = plt.subplot(nx,ny,plotnum)
+                noplotcmd = True  # do everything in one subplot
+                noprettycmd = True
+                vhandle = False
+                
+                colorbardefined = False
+                hlabel = ''
+                vlabel = ''
+                vhandle = ''
+    
+            # ==================================================================
+            elif pieces[-1] == 'f':  # filled contour with color bar
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 4 or nargs > 6:
+                    print ("qplot: expect /x,y,var[,colormap[,ccs]],f/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                varname = pieces[2]
+                [x, xdims] = getvar(filehandle,xname)
+                [y, ydims] = getvar(filehandle,yname)
+                [vart, vardims] = getmvar(filehandle,varname,badlim)
+                var = vart.T
+                check2dplot(xdims,ydims,vardims)
+                    
+                if nargs == 4:
+                    fhandle = plt.contourf(x,y,var)
+                    if not colorbardefined: bhandle = plt.colorbar(fhandle)
+                elif nargs == 5:
+                    fhandle = plt.contourf(x,y,var)
+                    colormap(pieces[3])
+                    if not colorbardefined: bhandle = plt.colorbar(fhandle)
+                else:
+                    ccs = pieces[4]
+                    ccp = ccs.split(':')
+                    if len(ccp) != 3:
+                        print ("qplot: ccs should be of form 'min:max:num'")
+                        quit()
+                    ctrs = linspace(float(ccp[0]),float(ccp[1]),float(ccp[2]))
+                    fhandle = plt.contourf(x,y,var,ctrs)
+                    colormap(pieces[3])
+                    if not colorbardefined: bhandle = plt.colorbar(fhandle)
+                    
+                colorbardefined = True
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'i':  # filled color image with color bar
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 4 or nargs > 5:
+                    print ("qplot: expect /x,y,var[,colormap],i/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                varname = pieces[2]
+                [x, xdims] = getvar(filehandle,xname)
+                [y, ydims] = getvar(filehandle,yname)
+                [vart, vardims] = getmvar(filehandle,varname,badlim)
+                var = vart.T
+                check2dplot(xdims,ydims,vardims)
+                
+                if nargs == 4:
+                    fhandle = plt.pcolor(x,y,var)
+                    if not colorbardefined: bhandle = plt.colorbar(fhandle)
+                else:
+                    fhandle = plt.pcolor(x,y,var)
+                    colormap(pieces[3])
+                    if not colorbardefined: bhandle = plt.colorbar(fhandle)
+        
+                colorbardefined = True
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'c':  # plain contour maybe with color bar
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 4 or nargs > 7:
+                    print ("qplot: expect /x,y,var[,c[,lw[,ccs]]],c/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                varname = pieces[2]
+                [x, xdims] = getvar(filehandle,xname)
+                [y, ydims] = getvar(filehandle,yname)
+                [vart, vardims] = getmvar(filehandle,varname,badlim)
+                var = vart.T
+                check2dplot(xdims,ydims,vardims)
+        
+                if nargs == 4:
+                    fhandle = plt.contour(x,y,var)
+                elif nargs == 5:
+                    cl = pieces[3]
+                    fhandle = plt.contour(x,y,var,colors=cl)
+                elif nargs == 6:
+                    cl = pieces[3]
+                    lw = float(pieces[4])
+                    fhandle = plt.contour(x,y,var,colors=cl,linewidths=lw)
+                else:
+                    cl = pieces[3]
+                    lw = float(pieces[4])
+                    ccs = pieces[5]
+                    ccp = ccs.split(':')
+                    if len(ccp) != 3:
+                        print ("qplot: ccs should be of form 'min:max:num'")
+                        quit()
+                    ctrs = linspace(float(ccp[0]),float(ccp[1]),float(ccp[2]))
+                    fhandle = plt.contour(x,y,var,ctrs,colors=cl,linewidths=lw)
+                    
+                if (nargs == 4) and not colorbardefined:
+                    bhandle = plt.colorbar(fhandle)
+                    colorbardefined = True
+                    
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'v':  # vector plot
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if not (nargs == 7 or nargs == 8 or nargs == 9):
+                    print ("qplot: expect /x,y,u,v,skx,sky[,scale[,c]],v/,",)
+                    "got", command
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                uname = pieces[2]
+                vname = pieces[3]
+                skxstring = pieces[4]
+                skystring = pieces[5]
+                skx = int(skxstring)
+                sky = int(skystring)
+                [xraw, xdims] = getvar(filehandle,xname)
+                [yraw, ydims] = getvar(filehandle,yname)
+                [uraw, udims] = getvar(filehandle,uname)
+                [vraw, vdims] = getvar(filehandle,vname)
+                xvec = xraw[::skx]
+                yvec = yraw[::sky]
+                u = uraw[::skx,::sky]
+                v = vraw[::skx,::sky]
+                check2dplot(xdims,ydims,udims)
+                check2dplot(xdims,ydims,vdims)
+                vhandle = True
+
+                if nargs == 7:
+                    vscale = autoscale(xvec,yvec,u,v,badlim)
+                    myvector(xvec,yvec,u,v,vscale,'k',badlim)
+                elif nargs == 8:
+                    vscale = float(pieces[6])
+                    myvector(xvec,yvec,u,v,vscale,'k',badlim)
+                else:
+                    vscale = float(pieces[6])
+                    vcolor = pieces[7]
+                    myvector(xvec,yvec,u,v,vscale,vcolor,badlim)
+        
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'p':  # plain plot
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 3 or nargs > 6:
+                    print ("qplot: expect /x,y[,fmt[,lw[,legend]]],p/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                if nargs == 6:
+                    legend = pieces[4]
+                else:
+                    legend = yname + ' vs ' + xname
+                [xraw, xdims] = getmvar(filehandle,xname,badlim)
+                [yraw, ydims] = getmvar(filehandle,yname,badlim)
+                [x, y] = check1dplot(xraw,yraw,xdims,ydims)
+                if nargs == 3:
+                    phandle = plt.plot(x,y,label=legend)
+                elif nargs == 4:
+                    phandle = plt.plot(x,y,pieces[2],label=legend)
+                else:
+                    lw = float(pieces[3])
+                    phandle = plt.plot(x,y,pieces[2],linewidth=lw,
+                                       markersize=lw,label=legend)
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'x':  # semi-log-x plot
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 3 or nargs > 6:
+                    print ("qplot: expect /x,y[,fmt[,lw[,legend]]],y/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                if nargs == 6:
+                    legend = pieces[4]
+                else:
+                    legend = yname + ' vs ' + xname
+                [xraw, xdims] = getmvar(filehandle,xname,badlim)
+                [yraw, ydims] = getmvar(filehandle,yname,badlim)
+                [x, y] = check1dplot(xraw,yraw,xdims,ydims)
+                if nargs == 3:
+                    phandle = plt.semilogx(x,y,label=legend)
+                elif nargs == 4:
+                    phandle = plt.semilogx(x,y,pieces[2],label=legend)
+                else:
+                    lw = float(pieces[3])
+                    phandle = plt.semilogx(x,y,pieces[2],linewidth=lw,
+                                       markersize=lw,label=legend)
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'y':  # semi-log-y plot
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 3 or nargs > 6:
+                    print ("qplot: expect /x,y[,fmt[,lw[,legend]]],y/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                if nargs == 6:
+                    legend = pieces[4]
+                else:
+                    legend = yname + ' vs ' + xname
+                [xraw, xdims] = getmvar(filehandle,xname,badlim)
+                [yraw, ydims] = getmvar(filehandle,yname,badlim)
+                [x, y] = check1dplot(xraw,yraw,xdims,ydims)
+                if nargs == 3:
+                    phandle = plt.semilogy(x,y,label=legend)
+                elif nargs == 4:
+                    phandle = plt.semilogy(x,y,pieces[2],label=legend)
+                else:
+                    lw = float(pieces[3])
+                    phandle = plt.semilogy(x,y,pieces[2],linewidth=lw,
+                                       markersize=lw,label=legend)
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'l':  # log-log plot
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 3 or nargs > 6:
+                    print ("qplot: expect /x,y[,fmt[,lw[,legend]]],y/,", "got", command)
+                    quit()
+        
+                xname = pieces[0]
+                yname = pieces[1]
+                if nargs == 6:
+                    legend = pieces[4]
+                else:
+                    legend = yname + ' vs ' + xname
+                [xraw, xdims] = getmvar(filehandle,xname,badlim)
+                [yraw, ydims] = getmvar(filehandle,yname,badlim)
+                [x, y] = check1dplot(xraw,yraw,xdims,ydims)
+                if nargs == 3:
+                    phandle = plt.loglog(x,y,label=legend)
+                elif nargs == 4:
+                    phandle = plt.loglog(x,y,pieces[2],label=legend)
+                else:
+                    lw = float(pieces[3])
+                    phandle = plt.loglog(x,y,pieces[2],linewidth=lw,
+                                       markersize=lw,label=legend)
+                noplotcmd = False
+                hlabel = xname
+                vlabel = yname
+        
+            # ==================================================================
+            elif pieces[-1] == 'd':  # draw line segments
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 3 or nargs > 6:
+                    print ("qplot: expect /xlist,ylist[,fmt[,lw[,legend]]],d/,", "got", command)
+                    quit()
+                    
+                if nargs == 6:
+                    legend = pieces[4]
+                else:
+                    legend = None
+                x = makearray(pieces[0])
+                y = makearray(pieces[1])
+                if len(x) != len(y):
+                    print ('qplot: lengths of x and y unequal in', pieces)
+                    quit()
+                    
+                if nargs == 3:
+                    phandle = plt.plot(x,y,label=legend)
+                elif nargs == 4:
+                    phandle = plt.plot(x,y,pieces[2],label=legend)
+                else:
+                    lw = float(pieces[3])
+                    phandle = plt.plot(x,y,pieces[2],linewidth=lw,
+                                       markersize=lw,label=legend)
+                noplotcmd = False
+    
+            # ==================================================================
+            elif pieces[-1] == 'a':  # draw a calibration arrow
+                if not noprettycmd:
+                    print ("qplot: plot beautification commands come after plots")
+                    quit()
+                    
+                nargs = len(pieces)
+                if nargs < 5 or nargs > 6:
+                    print ("qplot: expect /x,y,len,label[,c],a/,", "got", command)
+                    quit()
+    
+                xa = float(pieces[0])
+                ya = float(pieces[1])
+                length = float(pieces[2])
+                vtext = pieces[3]
+                if not vhandle:
+                    print ("qplot: no previous vector plot for calibration arrow")
+                    quit()
+                    
+                if nargs == 5:
+                    myarrow(xvec,yvec,xa,ya,vscale,length,vtext,'k')
+                else:
+                    myarrow(xvec,yvec,xa,ya,vscale,length,vtext,pieces[4])
+
+                noplotcmd = False
+    
+            # ==================================================================
+            elif pieces[-1] == 'ax':  # set axes
+                if len(pieces) != 7:
+                    print ("qplot: expect /xmin,xmax,dx,ymin,ymax,dy,ax/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                xmin = float(pieces[0])
+                xmax = float(pieces[1])
+                dx = float(pieces[2])
+                ymin = float(pieces[3])
+                ymax = float(pieces[4])
+                dy = float(pieces[5])
+                ntx = int(abs((xmax - xmin)/dx) + 1.5)
+                nty = int(abs((ymax - ymin)/dy) + 1.5)
+                axhandle = plt.axis([xmin,xmax,ymin,ymax])
+                txhandle = plt.xticks(linspace(xmin,xmax,ntx))
+                tyhandle = plt.yticks(linspace(ymin,ymax,nty))
+                noprettycmd = False
+    
+            # ==================================================================
+            elif pieces[-1] == 'lx':  # label x axis
+                if len(pieces) != 2:
+                    print ("qplot: expect /label,lx/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                label = pieces[0]
+                hlabel = label
+                noprettycmd = False
+        
+            # ==================================================================
+            elif pieces[-1] == 'ly':  # label y axis
+                if len(pieces) != 2:
+                    print ("qplot: expect /label,ly/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                label = pieces[0]
+                vlabel = label
+                noprettycmd = False
+        
+            # =================================================================
+            elif pieces[-1] == 'll':  # text label
+                if len(pieces) < 4 or len(pieces) > 5:
+                    print ("qplot: expect /label,xloc,yloc[,c],ll/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                label = pieces[0]
+                xloc = pieces[1]
+                yloc = pieces[2]
+                if len(pieces) == 4:
+                    lhandle = plt.text(xloc,yloc,label,fontsize=fsize)
+                else:
+                    c = pieces[3]
+                    lhandle = plt.text(xloc,yloc,label,fontsize=fsize,color=c)
+                noprettycmd = False
+        
+            # ==================================================================
+            elif pieces[-1] == 'tl':  # title
+                if len(pieces) < 2 or len(pieces) > 3:
+                    print ("qplot: expect /title[,fs],tl/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                title = pieces[0]
+                if len(pieces) == 2:
+                    thandle = plt.title(title,fontsize=fsize)
+                else:
+                    tfontsize = int(pieces[1])
+                    thandle = plt.title(title,fontsize=tfontsize)
+                noprettycmd = False
+        
+            # ==================================================================
+            elif pieces[-1] == 'tu':  # uber title
+                if len(pieces) < 2 or len(pieces) > 3:
+                    print ("qplot: expect /title[,fs],tu/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                title = pieces[0]
+                if len(pieces) == 2:
+                    thandle = plt.suptitle(title,fontsize=fsize)
+                else:
+                    tfontsize = int(pieces[1])
+                    thandle = plt.suptitle(title,fontsize=tfontsize)
+                noprettycmd = False
+        
+            # ==================================================================
+            elif pieces[-1] == 'le':  # draw line plot legend
+                if len(pieces) < 1 or len(pieces) > 2:
+                    print ("qplot: expect /[location,]le/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+        
+                if len(pieces) == 1:
+                    lehandle = plt.legend(frameon = False)
+
+                else:
+                    location = pieces[0]
+                    if location == 'ne':
+                        realloc = 'upper right'
+                    elif location == 'n':
+                        realloc = 'upper center'
+                    elif location == 'nw':
+                        realloc = 'upper left'
+                    elif location == 'w':
+                        realloc = 'center left'
+                    elif location == 'sw':
+                        realloc = 'lower left'
+                    elif location == 's':
+                        realloc = 'lower center'
+                    elif location == 'se':
+                        realloc = 'lower right'
+                    elif location == 'e':
+                        realloc = 'center right'
+                    elif location == 'c':
+                        realloc = 'center'
+                    else:
+                        print ("qplot: improper legend location", location)
+                        quit()
+
+                    lehandle = plt.legend(loc = realloc, frameon = False)
+                    
+                noprettycmd = False
+        
+            # ==================================================================
+            elif pieces[-1] == 'gr':  # draw a grid
+                if len(pieces) != 2:
+                    print ("qplot: expect /onoff,gr/,", "got", command)
+                    quit()
+        
+                if noplotcmd:
+                    print ("qplot: plot commands must precede label commands")
+                    quit()
+    
+                onoff = int(pieces[0])
+                if onoff:
+                    gridhandle = plt.grid(True)
+                else:
+                    gridhandle = plt.grid(False)
+                noprettycmd = False
+    
+            # ==================================================================
+            else:  # unknown command
+                print ("qplot: unknown command", command)
+        
+        # make axis labels if they exist
+        if len(hlabel) > 0:
+            xlhandle = plt.xlabel(hlabel)
+        if len(vlabel) > 0:
+            ylhandle = plt.ylabel(vlabel)
+    
+        # save figures if non-interactive -- number if more than one
+        if not interactive:
+            if nslices == 1:
+                file_name = '%s.%s' % (file_prefix, file_suffix)
+            else:
+                filledstr = str(vslicenum).zfill(3)
+                file_name = '%s%s.%s' % (file_prefix, filledstr, file_suffix)
+            plt.savefig(file_name)
+            plt.close()
+
+        # break if all slices consumed or at requested number
+        if (not filehandle.get_next_slice()) or (vslicenum >= (nslices - 1)):
+            break
+        else:
+            vslicenum = vslicenum + 1
+        
+    # finish
+    if interactive:
+        plt.show()
+
+# catch keyboard interrupt
+except KeyboardInterrupt:
+    print ("qplot: keyboard interrupt!")

@@ -1,0 +1,49 @@
+years="1980 1981 1982 1983 1984 1985 1986 1987 1988 1989 1990 1991 1992 1993 1994 1995 1996 1997 1998 1999 2000 2001 2002 2003 2004 2005 2006 2007 2008 2009 2010 2011 2012"
+lyears="1980 1984 1988 1992 1996 2000 2004 2008 2012"
+months="01 02 03 04 05 06 07 08 09 10 11 12"
+months31="01 03 05 07 08 10 12"
+months30="04 06 09 11"
+months2="02"
+days31="01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31"
+days30="01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30"
+days2="01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28"
+days2l="01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29"
+hours="00 12"
+stations="74560 72797 72694 72597 72493 72393 72293 74004 72274 72376 72388 72489 72582 72681 72786 72776 72572 72476 72672 72768 72469 72365 72364 72265 72363 72451 72562 72662 72764 72659 72558 72456 72646 72357 72249 72240 72248 72340 72440 72649 72747 72645 74455 74560 72235 72233 72634 72632 72426 72327 72230 72215 72214 72206 72208 72305 72317 72318 72520 72403 72402 72528 72518 72494 72389 72712 72501"
+
+for year in $years
+do
+ for month in $months
+ do
+  for day31 in $days31
+  do
+   for hour in $hours
+   do
+    for station in $stations
+    do
+
+      ls ${year}${month}${day31}.${hour}.${station}.cdf || cat baddata.cdf | cdfvlim p -9999 -9998 | cdfvlim index -9999 -9998 | cdfvlim t -9999 -9998 | cdfvlim dp -9999 -9998 | cdfvlim rh -9999 -9998 | cdfvlim mr -9999 -9998 | cdfvlim dir -9999 -9998 | cdfvlim knot -9999 -9998 | cdfvlim thta -9999 -9998 | cdfvlim thte -9999 -9998 | cdfvlim thtv -9999 -9998  > ${year}${month}${day31}.${hour}.${station}.cdf
+      
+    done
+   done
+  done
+ done
+done
+
+for month30 in $months30
+do
+rm *${month30}31.*.${station}.cdf
+done
+
+for year in $years 
+do
+rm ${year}0229.*.${station}.cdf
+rm ${year}0230.*.${station}.cdf
+rm ${year}0231.*.${station}.cdf
+done
+
+for lyear in $lyears
+do
+rm ${lyear}0230.*.${station}.cdf
+rm ${year}0231.*.${station}.cdf
+done
